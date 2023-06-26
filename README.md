@@ -1,1 +1,3 @@
-# Differential_Abundance
+# Differential Abundance Analysis
+
+A pipeline that encompasses the steps for differential abundance analysis of the pecan phyllosphere for 2021 and 2022. Samples were obtained from the E.V. Smith research facility, located in Tallassee, AL. Samples were decontaminated, subset to only include kingdom Fungi, as well as filtering out samples with less than 5000 reads. The [rds](https://github.com/Beatrice-Severance/Differential_Abundance/blob/main/21-22-fungi-phyloseq-clean.rds) file is used to kickstart the analysis process.
