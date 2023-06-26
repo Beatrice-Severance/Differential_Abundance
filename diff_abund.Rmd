@@ -1,0 +1,156 @@
+---
+title: "Differential_Abundance_Analysis"
+author: "Beatrice Severance, Zachary Noel"
+date: "2023-06-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Differential Abundance Analysis
+
+## Load Dependencies
+```{r}
+library(phyloseq)
+library(microbiome)
+library(vegan)
+library(tidyverse)
+library(ggplot2)
+library(minpack.lm)
+library(Hmisc)
+library(stats4)
+library(ggrepel)
+library(ANCOMBC)
+library(ggVennDiagram)
+library(VennDiagram)
+```
+
+## Colorblind Palette
+```{r}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+ibm.cbb <- c("#648FFF", "#785EF0", "#DC267F", "#FE6100", "grey")
+tol.cbb <- c("#332288", "#117733", "#44AA99", "#88CCEE", "#DDCC77", "#CC6677", "#AA4499", "#882255")
+```
+
+## Load RDS file
+```{r}
+#Load using non-normalized reads since spieceasi will normalize on its own
+phyloseq.clean.filt <- readRDS("21-22-fungi-phyloseq-clean.rds")
+```
+
+## Load taxonomy table
+```{r}
+tax_fungi <- phyloseq.clean.filt %>%
+  tax_table() %>%
+  as.data.frame()
+```
+
+## Differential Abundance Analysis with ANCOM-BC2
+```{r}
+# What time points are going to be useful for this analysis? Edit once figuring that out
+diffabund2021_T6 <- phyloseq.clean.filt %>%
+  phyloseq::subset_samples(Time %in% c("T6")) %>%
+  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
+
+# This step takes a bit of time to calculate. Let it run in the background.
+out = ancombc2(data = diffabund2021_T6, 
+              assay_name = NULL,
+              p_adj_method = "holm", 
+              prv_cut = 0.50, 
+              fix_formula = "Fungicide",
+              group = "Fungicide", 
+              struc_zero = TRUE, 
+              neg_lb = TRUE, 
+              alpha = 0.05, 
+              global = TRUE, 
+              n_cl = 1, verbose = TRUE)
+
+saveRDS(out, "diff_abund_2021_T6.rds")
+readRDS("diff_abund_2021_T6.rds")
+```
+Volcano plot
+```{r}
+ggplot(out$res, aes(x = lfc_FungicideFungicide, y = -log10(p_FungicideFungicide), color = diff_FungicideFungicide)) +
+  geom_point()
+```
+
+
+## Differential Abundance Test
+```{r}
+diff.abund <- out$res
+diff.abund2 <- left_join(diff.abund, tax_fungi, by = c("taxon" = "OTU"))
+diff.abund2[diff.abund2$taxon == "FOTU_99",]
+
+diff.abund2$diff_abund <- interaction(diff.abund2$`diff_CropCotton `, diff.abund$diff_CropSoybean)
+
+diff.abund2$Crop_diff_abund <- ifelse(diff.abund2$diff_abund == "TRUE.TRUE", "Soybean and Cotton", 
+                                      ifelse(diff.abund2$diff_abund == "TRUE.FALSE", "Cotton only",
+                                             ifelse(diff.abund2$diff_abund == "FALSE.TRUE", "Soybean only", "Not different")))
+
+saveRDS(diff.abund2, "diff_abund_42123.rds")
+diff.abund2 <- readRDS("diff_abund_42123.rds")
+
+# Various graphs can be generated from the data you have. Find what is prevalent and highlight that.
+# Examples below, can I write a function for this?
+diff.abund2 %>%
+  subset(Crop_diff_abund != "Not different") %>%
+  group_by(Phylum) %>%
+  summarise(n = n()) %>%
+  mutate(freq = round(n / sum(n), 2))
+  
+diff.abund2 %>%
+  subset(Crop_diff_abund != "Not different" & Phylum == "Firmicutes") %>%
+  group_by(Genus) %>%
+  summarise(n = n()) %>%
+  mutate(freq = round(n / sum(n), 2)) %>%
+  arrange(-freq)
+
+diff.abund2 %>%
+  subset(Crop_diff_abund != "Not different") %>%
+  group_by(Crop_diff_abund) %>%
+  summarise(n = n()) %>%
+  mutate(freq = round(n / sum(n), 2)) %>%
+  arrange(-freq)
+
+diff.abund2 %>%
+  subset(Crop_diff_abund != "Not different" & Phylum == "Proteobacteria") %>%
+  group_by(Label) %>%
+  summarise(n = n()) %>%
+  mutate(freq = round(n / sum(n), 2)) %>%
+  arrange(-freq) %>%
+  print(n = 50)
+
+# Make a differential abundance graph
+diff.aubundant.composition <- diff.abund2 %>%
+  subset(Crop_diff_abund != "Not different") %>%
+ggplot(aes(x = Crop_diff_abund, fill = Genus)) +
+  geom_bar() +
+  scale_fill_manual(values = c(cbbPalette, ibm.cbb, tol.cbb)) +
+  theme_classic() + 
+  xlab("")+
+  ylab("Count") +
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        legend.text = element_text(face = "italic", size = 5),
+        legend.title = element_blank(),
+        legend.key.size = unit(0.3, 'cm')) 
+
+# Make a differential abundance plot
+diff.abund.plot <- ggplot() + 
+  geom_point(data = subset(diff.abund2, diff_abund == "FALSE.FALSE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `), color = "grey", shape = 21) +
+  geom_point(data = subset(diff.abund2,  diff_abund == "TRUE.FALSE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(`q_CropCotton `)), shape = 22, alpha = 0.7) +
+  geom_point(data = subset(diff.abund2,  diff_abund == "FALSE.TRUE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(q_CropSoybean)), shape = 23, alpha = 0.7) +
+  geom_point(data = subset(diff.abund2,  diff_abund == "TRUE.TRUE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(q_CropSoybean)), shape = 24, alpha = 0.7) +
+  theme_classic() + 
+  geom_hline(yintercept = 0, lty = "dotted") +
+  geom_vline(xintercept = 0, lty = "dotted") + 
+  scale_fill_manual(values = c(cbbPalette, ibm.cbb, tol.cbb)) + 
+  xlab("log fold change soybean - soil") + 
+  ylab("log fold change cotton - soil") +
+  guides(size = FALSE) + 
+  theme(legend.position = "right")
+
+# Make an arranged figure
+ggarrange(diff.abund.plot, diff.aubundant.composition)
+```
