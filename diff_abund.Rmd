@@ -36,7 +36,7 @@ tol.cbb <- c("#332288", "#117733", "#44AA99", "#88CCEE", "#DDCC77", "#CC6677", "
 
 ## Load RDS file
 ```{r}
-#Load using non-normalized reads since spieceasi will normalize on its own
+#Load using non-normalized reads since ancombc will normalize on its own
 phyloseq.clean.filt <- readRDS("21-22-fungi-phyloseq-clean.rds")
 ```
 
@@ -49,16 +49,21 @@ tax_fungi <- phyloseq.clean.filt %>%
 
 ## Differential Abundance Analysis with ANCOM-BC2
 ```{r}
-# What time points are going to be useful for this analysis? Edit once figuring that out
-diffabund2021_T6 <- phyloseq.clean.filt %>%
-  phyloseq::subset_samples(Time %in% c("T6")) %>%
+# ANCOMBC has low false discovery rates at low n. This makes it useful for the current dataset.
+
+# What time points are going to be useful for this analysis?
+diffabund2021_T4_6 <- phyloseq.clean.filt %>%
+  # add T4 and T5 for more power
+  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021") %>%
   phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
 
 # This step takes a bit of time to calculate. Let it run in the background.
-out = ancombc2(data = diffabund2021_T6, 
+out = ancombc2(data = diffabund2021_T4_6, 
               assay_name = NULL,
+              # changing p adjust to none gives significant results, but holm gives none.
               p_adj_method = "holm", 
-              prv_cut = 0.50, 
+              prv_cut = 0.005, 
+              # maybe add time as a random factor?
               fix_formula = "Fungicide",
               group = "Fungicide", 
               struc_zero = TRUE, 
@@ -67,90 +72,124 @@ out = ancombc2(data = diffabund2021_T6,
               global = TRUE, 
               n_cl = 1, verbose = TRUE)
 
-saveRDS(out, "diff_abund_2021_T6.rds")
-readRDS("diff_abund_2021_T6.rds")
-```
-Volcano plot
-```{r}
-ggplot(out$res, aes(x = lfc_FungicideFungicide, y = -log10(p_FungicideFungicide), color = diff_FungicideFungicide)) +
-  geom_point()
+saveRDS(out, "diff_abund_2021_T4-6.rds")
+readRDS("diff_abund_2021_T4-6.rds")
 ```
 
-
-## Differential Abundance Test
+## All Years/Times
 ```{r}
+# ANCOMBC has low false discovery rates at low n. This makes it useful for the current dataset.
+
+# What time points are going to be useful for this analysis?
+diffabund21_22 <- phyloseq.clean.filt %>%
+  # add T4 and T5 for more power
+#  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021") %>%
+  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
+
+# This step takes a bit of time to calculate. Let it run in the background.
+out = ancombc2(data = diffabund21_22, 
+              assay_name = NULL,
+              # changing p adjust to none gives significant results, but holm gives none.
+              p_adj_method = "holm", 
+              prv_cut = 0.01, 
+              # maybe add time as a random factor?
+              fix_formula = "Fungicide",
+              group = "Fungicide", 
+              struc_zero = TRUE, 
+              neg_lb = TRUE, 
+              alpha = 0.05, 
+              global = TRUE, 
+              n_cl = 1, verbose = TRUE)
+
+saveRDS(out, "diff_abund_21-22.rds")
+readRDS("diff_abund_21-22.rds")
+
+# Volcano plot
+# Structural zeros
+struc.zero <- out$zero_ind
+struc.zero2 <- left_join(struc.zero, tax_fungi, by = c("taxon" = "OTU"))
+
+ggplot(struc.zero2[struc.zero2$`structural_zero (Fungicide = Control)` == TRUE,], aes(x = "Fungicide", fill = Phylum)) +
+  geom_bar() +
+  theme_classic() +
+  scale_fill_manual(values = c(cbbPalette, ibm.cbb), name = "Class") 
+
+# Differentially abundant taxa without including structural zeros
 diff.abund <- out$res
 diff.abund2 <- left_join(diff.abund, tax_fungi, by = c("taxon" = "OTU"))
-diff.abund2[diff.abund2$taxon == "FOTU_99",]
 
-diff.abund2$diff_abund <- interaction(diff.abund2$`diff_CropCotton `, diff.abund$diff_CropSoybean)
+# volcano plot
+volcano <- ggplot(diff.abund2, aes(x = lfc_FungicideFungicide, y = -log10(q_FungicideFungicide), shape = diff_FungicideFungicide, color = Class)) +
+  geom_point(show.legend = FALSE) +
+  geom_text_repel(data = diff.abund2[diff.abund2$q_FungicideFungicide < 0.05,],
+                  aes(label = Label), size = 1.5, show.legend = FALSE) + 
+  theme_classic() +
+  scale_color_manual(values = c(cbbPalette, ibm.cbb, tol.cbb), name = "Phylum") +
+  scale_shape_manual(values = c(20,24), name = "p ≤ 0.05")
+volcano
 
-diff.abund2$Crop_diff_abund <- ifelse(diff.abund2$diff_abund == "TRUE.TRUE", "Soybean and Cotton", 
-                                      ifelse(diff.abund2$diff_abund == "TRUE.FALSE", "Cotton only",
-                                             ifelse(diff.abund2$diff_abund == "FALSE.TRUE", "Soybean only", "Not different")))
+ggsave(plot = volcano, filename = "volcano.png", width = 8, height = 5.09)
+#dev.print(file = "volcano.png", device = png)
+```
 
-saveRDS(diff.abund2, "diff_abund_42123.rds")
-diff.abund2 <- readRDS("diff_abund_42123.rds")
+## Volcano plot
+```{r}
+# Structural zeros
+struc.zero <- out$zero_ind
+struc.zero2 <- left_join(struc.zero, tax_fungi, by = c("taxon" = "OTU"))
 
-# Various graphs can be generated from the data you have. Find what is prevalent and highlight that.
-# Examples below, can I write a function for this?
-diff.abund2 %>%
-  subset(Crop_diff_abund != "Not different") %>%
-  group_by(Phylum) %>%
-  summarise(n = n()) %>%
-  mutate(freq = round(n / sum(n), 2))
-  
-diff.abund2 %>%
-  subset(Crop_diff_abund != "Not different" & Phylum == "Firmicutes") %>%
-  group_by(Genus) %>%
-  summarise(n = n()) %>%
-  mutate(freq = round(n / sum(n), 2)) %>%
-  arrange(-freq)
-
-diff.abund2 %>%
-  subset(Crop_diff_abund != "Not different") %>%
-  group_by(Crop_diff_abund) %>%
-  summarise(n = n()) %>%
-  mutate(freq = round(n / sum(n), 2)) %>%
-  arrange(-freq)
-
-diff.abund2 %>%
-  subset(Crop_diff_abund != "Not different" & Phylum == "Proteobacteria") %>%
-  group_by(Label) %>%
-  summarise(n = n()) %>%
-  mutate(freq = round(n / sum(n), 2)) %>%
-  arrange(-freq) %>%
-  print(n = 50)
-
-# Make a differential abundance graph
-diff.aubundant.composition <- diff.abund2 %>%
-  subset(Crop_diff_abund != "Not different") %>%
-ggplot(aes(x = Crop_diff_abund, fill = Genus)) +
+ggplot(struc.zero2[struc.zero2$`structural_zero (Fungicide = Control)` == TRUE,], aes(x = "Fungicide", fill = Phylum)) +
   geom_bar() +
-  scale_fill_manual(values = c(cbbPalette, ibm.cbb, tol.cbb)) +
-  theme_classic() + 
-  xlab("")+
-  ylab("Count") +
-  theme(axis.text.x = element_text(angle=45, hjust=1),
-        legend.text = element_text(face = "italic", size = 5),
-        legend.title = element_blank(),
-        legend.key.size = unit(0.3, 'cm')) 
+  theme_classic() +
+  scale_fill_manual(values = cbbPalette, name = "Class") 
 
-# Make a differential abundance plot
-diff.abund.plot <- ggplot() + 
-  geom_point(data = subset(diff.abund2, diff_abund == "FALSE.FALSE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `), color = "grey", shape = 21) +
-  geom_point(data = subset(diff.abund2,  diff_abund == "TRUE.FALSE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(`q_CropCotton `)), shape = 22, alpha = 0.7) +
-  geom_point(data = subset(diff.abund2,  diff_abund == "FALSE.TRUE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(q_CropSoybean)), shape = 23, alpha = 0.7) +
-  geom_point(data = subset(diff.abund2,  diff_abund == "TRUE.TRUE"), aes(x = lfc_CropSoybean, y = `lfc_CropCotton `, fill = Order, size = -log10(q_CropSoybean)), shape = 24, alpha = 0.7) +
-  theme_classic() + 
-  geom_hline(yintercept = 0, lty = "dotted") +
-  geom_vline(xintercept = 0, lty = "dotted") + 
-  scale_fill_manual(values = c(cbbPalette, ibm.cbb, tol.cbb)) + 
-  xlab("log fold change soybean - soil") + 
-  ylab("log fold change cotton - soil") +
-  guides(size = FALSE) + 
-  theme(legend.position = "right")
+# Differentially abundant taxa without including structural zeros
+diff.abund <- out$res
+diff.abund2 <- left_join(diff.abund, tax_fungi, by = c("taxon" = "OTU"))
 
-# Make an arranged figure
-ggarrange(diff.abund.plot, diff.aubundant.composition)
+# volcano plot
+t4_6.volcano <- ggplot(diff.abund2, aes(x = lfc_FungicideFungicide, y = -log10(q_FungicideFungicide), shape = diff_FungicideFungicide, color = Class)) +
+  geom_point() +
+  geom_text_repel(data = diff.abund2[diff.abund2$q_FungicideFungicide < 0.05,],
+                  aes(label = Label), size = 1.5) + 
+  theme_classic() +
+  scale_color_manual(values = c(cbbPalette, ibm.cbb, tol.cbb), name = "Phylum") +
+  scale_shape_manual(values = c(20,24), name = "p ≤ 0.05")
+t4_6.volcano
+```
+
+## FUNGuildR
+```{r}
+#devtools::install_github("brendanf/FUNGuildR")
+library(FUNGuildR)
+
+# Extract taxonomy from phyloseq object
+tax_fungi <- phyloseq.clean.filt %>%
+  tax_table() %>%
+  as.data.frame()
+
+# Create combined, comma separated column
+tax_fungi$Taxonomy <- data.frame(paste(tax_fungi$Kingdom,
+                                       tax_fungi$Phylum,
+                                       tax_fungi$Class,
+                                       tax_fungi$Order,
+                                       tax_fungi$Family,
+                                       tax_fungi$Genus,
+                                       paste(tax_fungi$Genus, tax_fungi$Species, sep = " "), sep = ","))
+
+# rename the new column to Taxonomy! This is important for FUNGuild
+# edit column number for your data
+colnames(tax_fungi)[12] <- c("Taxonomy")
+head(tax_fungi)
+
+# grab database
+fung <- get_funguild_db()
+
+# loop over taxonomy file to assign OTUs; only OTUs lower than family level are assigned. This step takes awhile!
+sample.guild.tax <- tax_fungi %>%
+  group_by(OTU) %>%
+  nest() %>%
+  mutate(guild = map(data, ~funguild_assign(., db = fung))) %>%
+  unnest(guild) %>%
+  select(OTU, Kingdom:citationSource)
 ```
