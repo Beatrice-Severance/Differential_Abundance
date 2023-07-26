@@ -1,7 +1,7 @@
 ---
 title: "Differential_Abundance_Analysis"
 author: "Beatrice Severance, Zachary Noel"
-date: "2023-06-26"
+date: "2023-07-26"
 output: html_document
 ---
 
@@ -40,50 +40,59 @@ tol.cbb <- c("#332288", "#117733", "#44AA99", "#88CCEE", "#DDCC77", "#CC6677", "
 phyloseq.clean.filt <- readRDS("21-22-fungi-phyloseq-clean.rds")
 ```
 
+## Taxonomy with FUNGuildR
+```{r}
+#devtools::install_github("brendanf/FUNGuildR")
+library(FUNGuildR)
+
+# Extract taxonomy from phyloseq object
+tax_fungi <- phyloseq.clean.filt %>%
+  tax_table() %>%
+  as.data.frame()
+
+# Create combined, comma separated column
+tax_fungi$Taxonomy <- data.frame(paste(tax_fungi$Kingdom,
+                                       tax_fungi$Phylum,
+                                       tax_fungi$Class,
+                                       tax_fungi$Order,
+                                       tax_fungi$Family,
+                                       tax_fungi$Genus,
+                                       paste(tax_fungi$Genus, tax_fungi$Species, sep = " "), sep = ","))
+
+# rename the new column to Taxonomy! This is important for FUNGuild
+# edit column number for your data
+colnames(tax_fungi)[12] <- c("Taxonomy")
+head(tax_fungi)
+
+# grab database
+fung <- get_funguild_db()
+
+# loop over taxonomy file to assign OTUs; only OTUs lower than family level are assigned. This step takes awhile!
+sample.guild.tax <- tax_fungi %>%
+  group_by(OTU) %>%
+  nest() %>%
+  mutate(guild = map(data, ~funguild_assign(., db = fung))) %>%
+  unnest(guild) %>%
+  select(OTU, Kingdom:citationSource)
+```
+
 ## Load taxonomy table
 ```{r}
+# Can use either phyloseq taxonomy or left join the FUNGuildR taxonomy created above and use in this step
 tax_fungi <- phyloseq.clean.filt %>%
   tax_table() %>%
   as.data.frame()
 ```
 
 ## Differential Abundance Analysis with ANCOM-BC2
-```{r}
-# ANCOMBC has low false discovery rates at low n. This makes it useful for the current dataset.
-
-# What time points are going to be useful for this analysis?
-diffabund2021_T4_6 <- phyloseq.clean.filt %>%
-  # add T4 and T5 for more power
-  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021") %>%
-  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
-
-# This step takes a bit of time to calculate. Let it run in the background.
-out = ancombc2(data = diffabund2021_T4_6, 
-              assay_name = NULL,
-              # changing p adjust to none gives significant results, but holm gives none.
-              p_adj_method = "holm", 
-              prv_cut = 0.005, 
-              # maybe add time as a random factor?
-              fix_formula = "Fungicide",
-              group = "Fungicide", 
-              struc_zero = TRUE, 
-              neg_lb = TRUE, 
-              alpha = 0.05, 
-              global = TRUE, 
-              n_cl = 1, verbose = TRUE)
-
-saveRDS(out, "diff_abund_2021_T4-6.rds")
-readRDS("diff_abund_2021_T4-6.rds")
-```
-
-## All Years/Times
+### All Years/Times
 ```{r}
 # ANCOMBC has low false discovery rates at low n. This makes it useful for the current dataset.
 
 # What time points are going to be useful for this analysis?
 diffabund21_22 <- phyloseq.clean.filt %>%
   # add T4 and T5 for more power
-#  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021") %>%
+  phyloseq::subset_samples(Fungicide %in% c("Fungicide", "Control") & DPF != "0-dpf") %>%
   phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
 
 # This step takes a bit of time to calculate. Let it run in the background.
@@ -132,8 +141,33 @@ ggsave(plot = volcano, filename = "volcano.png", width = 8, height = 5.09)
 #dev.print(file = "volcano.png", device = png)
 ```
 
-## Volcano plot
+### 2021 T4-T6
 ```{r}
+
+diffabund2021_T4_6 <- phyloseq.clean.filt %>%
+  # add T4 and T5 give more power
+  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021" & Objective == 1) %>%
+  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
+
+# This step takes a bit of time to calculate. Let it run in the background.
+out = ancombc2(data = diffabund2021_T4_6, 
+              assay_name = NULL,
+              # changing p adjust to none gives significant results, but holm gives none.
+              p_adj_method = "holm", 
+              prv_cut = 0.01, 
+              # maybe add time as a random factor?
+              fix_formula = "Fungicide",
+              group = "Fungicide", 
+              struc_zero = TRUE, 
+              neg_lb = TRUE, 
+              alpha = 0.05, 
+              global = TRUE, 
+              n_cl = 1, verbose = TRUE)
+
+saveRDS(out, "diffabund2021_T4_6.rds")
+readRDS("diffabund2021_T4_6.rds")
+
+# Volcano plot
 # Structural zeros
 struc.zero <- out$zero_ind
 struc.zero2 <- left_join(struc.zero, tax_fungi, by = c("taxon" = "OTU"))
@@ -158,38 +192,31 @@ t4_6.volcano <- ggplot(diff.abund2, aes(x = lfc_FungicideFungicide, y = -log10(q
 t4_6.volcano
 ```
 
-## FUNGuildR
+## Differential Abundance Analysis with DESeq2
+### 2021 T4-T6
 ```{r}
-#devtools::install_github("brendanf/FUNGuildR")
-library(FUNGuildR)
+# What time points are going to be useful for this analysis?
+diffabund2021_T4_6 <- phyloseq.clean.filt %>%
+  # add T4 and T5 for more power
+  phyloseq::subset_samples(Time %in% c("T4", "T5", "T6") & Year == "2021" & Objective == 1) %>%
+  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
 
-# Extract taxonomy from phyloseq object
-tax_fungi <- phyloseq.clean.filt %>%
-  tax_table() %>%
-  as.data.frame()
+#BiocManager::install("DESeq2")
+library(DESeq2)
+diagdds = phyloseq_to_deseq2(diffabund2021_T4_6, ~Fungicide)
 
-# Create combined, comma separated column
-tax_fungi$Taxonomy <- data.frame(paste(tax_fungi$Kingdom,
-                                       tax_fungi$Phylum,
-                                       tax_fungi$Class,
-                                       tax_fungi$Order,
-                                       tax_fungi$Family,
-                                       tax_fungi$Genus,
-                                       paste(tax_fungi$Genus, tax_fungi$Species, sep = " "), sep = ","))
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 1
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(diffabund2021_T4_6)[rownames(sigtab), ], "matrix"))
 
-# rename the new column to Taxonomy! This is important for FUNGuild
-# edit column number for your data
-colnames(tax_fungi)[12] <- c("Taxonomy")
-head(tax_fungi)
-
-# grab database
-fung <- get_funguild_db()
-
-# loop over taxonomy file to assign OTUs; only OTUs lower than family level are assigned. This step takes awhile!
-sample.guild.tax <- tax_fungi %>%
-  group_by(OTU) %>%
-  nest() %>%
-  mutate(guild = map(data, ~funguild_assign(., db = fung))) %>%
-  unnest(guild) %>%
-  select(OTU, Kingdom:citationSource)
+t4_6.volcano <- ggplot(sigtab, aes(x = log2FoldChange, y = -log10(padj), color = Class)) +
+  geom_point() +
+  geom_text_repel(data = sigtab[sigtab$padj <= 0.01,],
+                  aes(label = Label), size = 1.5) +
+  theme_classic() +
+  scale_color_manual(values = c(cbbPalette, ibm.cbb, tol.cbb), name = "Phylum") +
+  scale_shape_manual(values = c(20,24), name = "p <= 0.05")
+t4_6.volcano
 ```
