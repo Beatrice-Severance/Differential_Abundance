@@ -193,6 +193,36 @@ t4_6.volcano
 ```
 
 ## Differential Abundance Analysis with DESeq2
+### All Years/Times
+```{r}
+diffabund21_22 <- phyloseq.clean.filt %>%
+  phyloseq::subset_samples(Fungicide %in% c("Fungicide", "Control") & DPF != "0-dpf") %>%
+  phyloseq::filter_taxa(function(x) sum(x) > 0, TRUE)
+
+library(DESeq2)
+diagdds = phyloseq_to_deseq2(diffabund21_22, ~Fungicide)
+
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+res = results(diagdds, cooksCutoff = FALSE)
+alpha = 1
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(diffabund21_22)[rownames(sigtab), ], "matrix"))
+
+#tiff("t4_6volcano.tiff", units = "in", width = 8, height = 8, res=800)
+deseq21_22volcano <- ggplot(sigtab, aes(x = log2FoldChange, y = -log10(padj), color = Class)) +
+  geom_point() +
+  geom_text_repel(data = sigtab[sigtab$padj <= 0.01,],
+                  aes(label = Label), size = 1.5) +
+  theme_classic() +
+  labs(title = "Combined 2021/2022 Differential Abundance with DESeq2") +
+  scale_color_manual(values = c(cbbPalette, ibm.cbb, tol.cbb), name = "Phylum") +
+  scale_shape_manual(values = c(20,24), name = "p <= 0.05")
+#dev.off()
+deseq21_22volcano
+
+ggsave(plot = deseq21_22volcano, filename = "Figures/deseq21_22volcano.png", width = 8, height = 5.09)
+```
+
 ### 2021 T4-T6
 ```{r}
 # What time points are going to be useful for this analysis?
@@ -211,12 +241,18 @@ alpha = 1
 sigtab = res[which(res$padj < alpha), ]
 sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(diffabund2021_T4_6)[rownames(sigtab), ], "matrix"))
 
+#tiff("t4_6volcano.tiff", units = "in", width = 8, height = 8, res=800)
 t4_6.volcano <- ggplot(sigtab, aes(x = log2FoldChange, y = -log10(padj), color = Class)) +
   geom_point() +
   geom_text_repel(data = sigtab[sigtab$padj <= 0.01,],
                   aes(label = Label), size = 1.5) +
   theme_classic() +
+  labs(title = "2021 T4 through T6 Differential Abundance with DESeq2") +
   scale_color_manual(values = c(cbbPalette, ibm.cbb, tol.cbb), name = "Phylum") +
   scale_shape_manual(values = c(20,24), name = "p <= 0.05")
+#dev.off()
 t4_6.volcano
+
+ggsave(plot = t4_6.volcano, filename = "Figures/deseqt4_6volcano.png", width = 8, height = 5.09)
+
 ```
